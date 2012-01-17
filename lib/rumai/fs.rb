@@ -5,15 +5,16 @@ require 'socket'
 
 module Rumai
   # address of the IXP server socket on this machine
-  display = ENV['DISPLAY'] || ':0.0'
+  def self.ixp_sock_addr
+    display = ENV['DISPLAY'] || ':0.0'
 
-  IXP_SOCK_ADDR = ENV['WMII_ADDRESS'].sub(/.*!/, '') rescue
-    "/tmp/ns.#{ENV['USER']}.#{display[/:\d+/]}/wmii"
+    ENV['WMII_ADDRESS'].sub(/.*!/, '') rescue
+      "/tmp/ns.#{ENV['USER']}.#{display[/:\d+/]}/wmii"
+  end
 
-  begin
+  def self.ixp_agent
     # we use a single, global connection to wmii's IXP server
-    IXP_AGENT = IXP::Agent.new(UNIXSocket.new(IXP_SOCK_ADDR))
-
+    @agent ||= IXP::Agent.new(UNIXSocket.new(ixp_sock_addr))
   rescue => error
     error.message << %{\n
 Ensure that (1) the WMII_ADDRESS environment variable is set and that (2) it
@@ -39,7 +40,7 @@ which is typically located at "/tmp/ns.${USER}.${DISPLAY}/wmii".
     # @see Rumai::IXP::Agent#stat
     #
     def stat
-      IXP_AGENT.stat @path
+      Rumai.ixp_agent.stat @path
     end
 
     ##
@@ -68,10 +69,8 @@ which is typically located at "/tmp/ns.${USER}.${DISPLAY}/wmii".
     # @see Rumai::IXP::Agent#entries
     #
     def entries
-      begin
-        IXP_AGENT.entries @path
-      rescue IXP::Error
-        []
+      catching_ixp_errors 'get entries', [] do
+        Rumai.ixp_agent.entries @path
       end
     end
 
@@ -81,7 +80,7 @@ which is typically located at "/tmp/ns.${USER}.${DISPLAY}/wmii".
     # @see Rumai::IXP::Agent#open
     #
     def open mode = 'r', &block
-      IXP_AGENT.open @path, mode, &block
+      Rumai.ixp_agent.open @path, mode, &block
     end
 
     ##
@@ -90,7 +89,9 @@ which is typically located at "/tmp/ns.${USER}.${DISPLAY}/wmii".
     # @see Rumai::IXP::Agent#read
     #
     def read *args
-      IXP_AGENT.read @path, *args
+      catching_ixp_errors 'read from' do
+        Rumai.ixp_agent.read @path, *args
+      end
     end
 
     ##
@@ -113,7 +114,9 @@ which is typically located at "/tmp/ns.${USER}.${DISPLAY}/wmii".
     # @see Rumai::IXP::Agent#write
     #
     def write content
-      IXP_AGENT.write @path, content
+      catching_ixp_errors 'write to' do
+        Rumai.ixp_agent.write @path, content
+      end
     end
 
     ##
@@ -122,7 +125,9 @@ which is typically located at "/tmp/ns.${USER}.${DISPLAY}/wmii".
     # @see Rumai::IXP::Agent#create
     #
     def create *args
-      IXP_AGENT.create @path, *args
+      catching_ixp_errors 'create on' do
+        Rumai.ixp_agent.create @path, *args
+      end
     end
 
     ##
@@ -131,7 +136,9 @@ which is typically located at "/tmp/ns.${USER}.${DISPLAY}/wmii".
     # @see Rumai::IXP::Agent#remove
     #
     def remove
-      IXP_AGENT.remove @path
+      catching_ixp_errors 'remove from' do
+        Rumai.ixp_agent.remove @path
+      end
     end
 
     @@cache = Hash.new {|h,k| h[k] = Node.new(k) }
@@ -173,6 +180,13 @@ which is typically located at "/tmp/ns.${USER}.${DISPLAY}/wmii".
       children.each do |c|
         c.remove
       end
+    end
+
+    def catching_ixp_errors(action="do", fallback=nil)
+      yield
+    rescue IXP::Error => e
+      STDERR.puts "could not #{action} IXP Agent (#{Rumai.ixp_sock_addr}): #{e}\n#{e.backtrace.join("\n")}\n  => trying to continue anyway"
+      return fallback
     end
 
     ##
